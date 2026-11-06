@@ -1,0 +1,47 @@
+# Environment files
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Backend dependencies and build output
+backend/node_modules/
+backend/dist/
+
+# Uploaded user files
+backend/uploads/
+
+# Frontend environment files
+frontend/.env
+frontend/.env.*
+
+# Dependencies and generated files
+node_modules/
+frontend/node_modules/
+frontend/.expo/
+
+# Separate debugging project
+react-native-chat-debug-/
+
+# Android machine-specific files and build caches
+frontend/android/local.properties
+frontend/android/.kotlin/
+frontend/android/.gradle/
+frontend/android/**/build/
+frontend/android/gradle.properties.backup
+
+# iOS generated files and local settings
+frontend/ios/Pods/
+frontend/ios/build/
+frontend/ios/.xcode.env.local
+
+# Operating system files
+.DS_Store
+
+# Local Android signing key
+frontend/android/app/debug.keystore
+
+# Build artifacts
+frontend/student-centre-dev.apk
+
+# Empty testing placeholder
+frontend/src/CodeRabbitTest.tsx

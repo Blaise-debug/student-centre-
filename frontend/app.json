@@ -1,0 +1,62 @@
+{
+  "expo": {
+    "name": "Student Centre",
+    "slug": "frontend",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/play_store_512.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "scheme": "studentscentre",
+    "splash": {
+      "image": "./assets/play_store_512.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#129A51"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.blaisestephen.studentcentre",
+      "associatedDomains": [
+        "applinks:studentscentre.app"
+      ]
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/play_store_512.png",
+        "backgroundColor": "#129A51"
+      },
+      "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
+      "predictiveBackGestureEnabled": false,
+      "package": "com.blaisestephen.studentcentre",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "studentscentre.app",
+              "pathPrefix": "/posts"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "95d69a3d-2b35-4883-a67e-3630a36f1b83"
+      }
+    },
+    "plugins": [
+      "expo-font"
+    ]
+  }
+}
