@@ -6,10 +6,12 @@ import path from 'path';
 import fs from 'fs';
 
 import authRoutes from './routes/auth.routes';
+import academicProfileRoutes from './routes/academic-profile.routes';
 import userRoutes from './routes/user.routes';
 import conversationRoutes from './routes/conversation.routes';
 import messageRoutes from './routes/message.routes';
 import notificationRoutes from './routes/notification.routes';
+import postRoutes from './routes/post.routes';
 import { errorHandler } from './middleware/error.middleware';
 
 const app: Application = express();
@@ -46,10 +48,12 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/academic-profile', academicProfileRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/posts', postRoutes);
 
 app.use(errorHandler);
 

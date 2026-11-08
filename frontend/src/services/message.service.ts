@@ -3,8 +3,11 @@ import { Message } from '../types/models';
 import { normalizeUser } from '../utils/normalize';
 
 function normalizeMessage(raw: any): Message {
+  const id = String(raw._id ?? raw.id ?? '');
   return {
     ...raw,
+    id,
+    _id: id,
     sender: normalizeUser(raw.sender),
     replyTo: raw.replyTo
       ? {

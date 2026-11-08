@@ -39,8 +39,8 @@ export default function RegisterScreen() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       return 'Please enter a valid email address.';
     }
-    if (password.length < 8 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
-      return 'Password must be at least 8 characters with a letter and a number.';
+    if (password.length < 8 || password.length > 72 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
+      return 'Password must be 8-72 characters and include a letter and a number.';
     }
     return null;
   }
@@ -55,15 +55,21 @@ export default function RegisterScreen() {
     setIsSubmitting(true);
     try {
       await register(username.trim(), email.trim(), password, displayName.trim());
-      // Navigation happens automatically once `user` is set in AuthContext
-    } catch (error: any) {
-  console.log('[Register] error.message:', error?.message);
-  console.log('[Register] error.response:', error?.response?.data);
-  console.log('[Register] error.code:', error?.code);
-  const message =
-    error?.response?.data?.message || 'Registration failed. Please try again.';
-  Alert.alert('Registration failed', message);
-} finally {
+      navigation.navigate('VerifyEmail', { email: email.trim().toLowerCase() });
+    } catch (error: unknown) {
+      const apiError = error as { response?: { data?: { message?: string; code?: string } } };
+      if (apiError.response?.data?.code === 'VERIFICATION_EMAIL_FAILED') {
+        navigation.navigate('VerifyEmail', {
+          email: email.trim().toLowerCase(),
+          notice: 'Your account was created, but the email could not be sent. Try resending the code.',
+        });
+        return;
+      }
+      Alert.alert(
+        'Registration failed',
+        apiError.response?.data?.message || 'Please check your details and try again.'
+      );
+    } finally {
       setIsSubmitting(false);
     }
   }
@@ -117,6 +123,7 @@ export default function RegisterScreen() {
           onChangeText={setPassword}
           secureTextEntry
           autoCapitalize="none"
+          maxLength={72}
           editable={!isSubmitting}
         />
 

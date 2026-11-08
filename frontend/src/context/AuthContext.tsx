@@ -6,20 +6,28 @@ import React, {
   ReactNode,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
 import { User } from '../types/models';
-import { loginUser, registerUser, fetchCurrentUser } from '../services/auth.service';
+import {
+  fetchCurrentUser,
+  loginUser,
+  registerUser,
+  verifyEmail as verifyEmailRequest,
+} from '../services/auth.service';
 
 interface AuthContextValue {
   user: User | null;
   token: string | null;
   isLoading: boolean;
   login: (emailOrUsername: string, password: string) => Promise<void>;
+  verifyEmail: (email: string, code: string) => Promise<void>;
   register: (
     username: string,
     email: string,
     password: string,
     displayName: string
   ) => Promise<void>;
+  refreshUser: () => Promise<User>;
   logout: () => Promise<void>;
 }
 
@@ -46,9 +54,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const currentUser = await fetchCurrentUser();
       setUser(currentUser);
     } catch (error) {
-      console.warn('[Auth] Session restore failed, clearing token');
-      await AsyncStorage.removeItem('authToken');
-      setToken(null);
+      const definitiveAuthFailure =
+        axios.isAxiosError(error) &&
+        (error.response?.status === 401 || error.response?.status === 403);
+      console.warn('[Auth] Session restore failed');
+      if (definitiveAuthFailure) {
+        await AsyncStorage.removeItem('authToken');
+        setToken(null);
+      }
       setUser(null);
     } finally {
       setIsLoading(false);
@@ -60,9 +73,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       emailOrUsername,
       password
     );
-    await AsyncStorage.setItem('authToken', newToken);
-    setToken(newToken);
-    setUser(loggedInUser);
+    await saveSession(newToken, loggedInUser);
+  }
+
+  async function verifyEmail(email: string, code: string) {
+    const { token: newToken, user: verifiedUser } = await verifyEmailRequest(email, code);
+    await saveSession(newToken, verifiedUser);
   }
 
   async function register(
@@ -71,26 +87,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     password: string,
     displayName: string
   ) {
-    const { token: newToken, user: newUser } = await registerUser(
+    await registerUser(
       username,
       email,
       password,
       displayName
     );
+  }
+
+  async function saveSession(newToken: string, newUser: User) {
     await AsyncStorage.setItem('authToken', newToken);
     setToken(newToken);
     setUser(newUser);
   }
 
+  async function refreshUser(): Promise<User> {
+    const currentUser = await fetchCurrentUser();
+    setUser(currentUser);
+    return currentUser;
+  }
+
   async function logout() {
-    await AsyncStorage.removeItem('authToken');
-    setToken(null);
-    setUser(null);
+    try {
+      await AsyncStorage.removeItem('authToken');
+    } finally {
+      setToken(null);
+      setUser(null);
+    }
   }
 
   return (
     <AuthContext.Provider
-      value={{ user, token, isLoading, login, register, logout }}
+      value={{ user, token, isLoading, login, verifyEmail, register, refreshUser, logout }}
     >
       {children}
     </AuthContext.Provider>

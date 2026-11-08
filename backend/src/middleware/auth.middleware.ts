@@ -33,7 +33,9 @@ export async function requireAuth(
       });
     }
 
-    const user = await User.findById(payload.userId).select('isVerified');
+    const user = await User.findById(payload.userId)
+      .select('isVerified +authVersion')
+      .exec();
 
     if (!user) {
       return res.status(401).json({
@@ -45,6 +47,12 @@ export async function requireAuth(
       return res.status(403).json({
         message: 'Please verify your email before accessing this resource.',
         code: 'EMAIL_NOT_VERIFIED',
+      });
+    }
+
+    if ((user.authVersion ?? 0) !== payload.tokenVersion) {
+      return res.status(401).json({
+        message: 'Session expired. Please sign in again.',
       });
     }
 

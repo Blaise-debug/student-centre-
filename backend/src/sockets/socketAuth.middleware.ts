@@ -24,7 +24,7 @@ export async function socketAuthMiddleware(
     }
 
     const user = await User.findById(payload.userId)
-      .select('isVerified')
+      .select('isVerified +authVersion')
       .exec();
 
     if (!user) {
@@ -33,6 +33,10 @@ export async function socketAuthMiddleware(
 
     if (!user.isVerified) {
       return next(new Error('EMAIL_NOT_VERIFIED'));
+    }
+
+    if ((user.authVersion ?? 0) !== payload.tokenVersion) {
+      return next(new Error('Invalid or expired token'));
     }
 
     socket.userId = payload.userId;

@@ -10,5 +10,7 @@ export function normalizeUser(raw: any): User {
     bio: raw.bio,
     status: raw.status,
     lastSeen: raw.lastSeen,
+    isVerified: raw.isVerified,
+    onboardingComplete: Boolean(raw.onboardingComplete),
   };
 }

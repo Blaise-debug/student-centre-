@@ -35,6 +35,10 @@ export type RootStackParamList = {
   // Authentication
   Login: undefined;
   Register: undefined;
+  VerifyEmail: { email: string; notice?: string };
+  ForgotPassword: { email?: string } | undefined;
+  ResetPassword: { token?: string } | undefined;
+  Onboarding: undefined;
 
   // Authenticated application
   MainTabs: NavigatorScreenParams<DrawerParamList>;

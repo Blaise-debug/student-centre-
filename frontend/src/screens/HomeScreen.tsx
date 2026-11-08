@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Modal,
+  ActivityIndicator,
   ScrollView,
   Image,
   KeyboardAvoidingView,
@@ -20,6 +21,7 @@ import {
   Keyboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { ResizeMode, Video } from 'expo-av';
 import { colors } from '../theme/colors';
 import * as ImagePicker from 'expo-image-picker';
 import * as Linking from 'expo-linking';
@@ -32,6 +34,10 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useKeyboardHandler } from 'react-native-keyboard-controller';
 import { initialEvents, EventItem, EventDetailModal } from './EventsScreen';
+import { fetchAcademicProfile, updateActiveUnit } from '../services/academic-profile.service';
+import { deleteUnitPost, fetchUnitPosts, createUnitPost, updateUnitPost } from '../services/posts.service';
+import type { PostDto } from '../services/posts.service';
+import { useAuth } from '../context/AuthContext';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -53,12 +59,40 @@ interface CommentItemData {
 
 interface Post {
   id: string;
+  authorId: string;
+  courseUnit: string;
   author: string;
   subtitle: string;
   text: string;
   mediaUri?: string;
+  mediaType?: 'image' | 'video' | null;
   commentsCount: number;
   challengesCount: number;
+}
+
+function formatPostTimestamp(value: string): string {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return 'Recently';
+  const ageMs = Math.max(0, Date.now() - timestamp);
+  if (ageMs < 60_000) return 'Just now';
+  if (ageMs < 3_600_000) return `${Math.floor(ageMs / 60_000)}m ago`;
+  if (ageMs < 86_400_000) return `${Math.floor(ageMs / 3_600_000)}h ago`;
+  return new Date(value).toLocaleDateString();
+}
+
+function mapPostDto(post: PostDto): Post {
+  return {
+    id: post.id,
+    authorId: post.author.id,
+    courseUnit: post.courseUnit,
+    author: post.author.displayName || post.author.username || 'Student',
+    subtitle: formatPostTimestamp(post.createdAt),
+    text: post.text,
+    mediaUri: post.mediaUri || undefined,
+    mediaType: post.mediaType,
+    commentsCount: post.commentsCount,
+    challengesCount: post.challengesCount,
+  };
 }
 
 export interface HomeScreenRef {
@@ -97,7 +131,7 @@ export function CreatePostScreen({
   isEditing = false,
 }: {
   onClose: () => void;
-  onSubmit: (text: string, mediaUri?: string) => void;
+  onSubmit: (text: string, mediaUri?: string) => Promise<void>;
   initialText?: string;
   initialMediaUri?: string;
   isEditing?: boolean;
@@ -106,6 +140,7 @@ export function CreatePostScreen({
   const [text, setText] = useState(initialText);
   const [mediaUri, setMediaUri] = useState<string | null>(initialMediaUri || null);
   const [captionText, setCaptionText] = useState(initialMediaUri ? initialText : '');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const pickImage = async () => {
     let result = await ImagePicker.launchImageLibraryAsync({
@@ -134,7 +169,11 @@ export function CreatePostScreen({
         {mediaUri ? (
           <View style={styles.previewContainer}>
             <View style={styles.mediaPreviewWrapper}>
-              <Image source={{ uri: mediaUri }} style={styles.mediaPreview} />
+              {/\.(mp4|mov|webm)(?:\?|$)/i.test(mediaUri) ? (
+                <Video source={{ uri: mediaUri }} style={styles.mediaPreview} resizeMode={ResizeMode.COVER} useNativeControls />
+              ) : (
+                <Image source={{ uri: mediaUri }} style={styles.mediaPreview} />
+              )}
               <TouchableOpacity style={styles.removeMedia} onPress={() => setMediaUri(null)}>
                 <Ionicons name="close-circle" size={28} color="#d32f2f" />
               </TouchableOpacity>
@@ -169,6 +208,7 @@ export function CreatePostScreen({
         <TouchableOpacity
           style={[styles.createPostActionButton, styles.discardActionButton]}
           onPress={onClose}
+          disabled={isSubmitting}
           accessibilityRole="button"
           accessibilityLabel="Discard post"
         >
@@ -176,16 +216,29 @@ export function CreatePostScreen({
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.createPostActionButton, styles.submitActionButton]}
-          onPress={() => {
-            onSubmit(mediaUri ? captionText : text, mediaUri || undefined);
-            if (isEditing) {
-              Alert.alert('Success', 'Post updated successfully');
+          onPress={async () => {
+            const postText = mediaUri ? captionText : text;
+            if (!postText.trim() && !mediaUri) {
+              Alert.alert('Post is empty', 'Write something or attach a photo or video.');
+              return;
+            }
+            setIsSubmitting(true);
+            try {
+              await onSubmit(postText, mediaUri || undefined);
+              if (isEditing) Alert.alert('Success', 'Post updated successfully');
+              onClose();
+            } catch (error: any) {
+              const message = error?.response?.data?.message || error?.message || 'Please try again.';
+              Alert.alert(isEditing ? 'Unable to update post' : 'Unable to publish post', message);
+            } finally {
+              setIsSubmitting(false);
             }
           }}
+          disabled={isSubmitting}
           accessibilityRole="button"
           accessibilityLabel={isEditing ? 'Save post' : 'Publish post'}
         >
-          <Text style={styles.addButtonText}>{isEditing ? 'Save' : 'Post'}</Text>
+          <Text style={styles.addButtonText}>{isSubmitting ? 'Saving…' : isEditing ? 'Save' : 'Post'}</Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -580,9 +633,11 @@ export function PostDetailModal({
 
           {post.text ? <Text style={styles.postDetailText}>{post.text}</Text> : null}
 
-          {post.mediaUri && (
+          {post.mediaUri && (post.mediaType === 'video' ? (
+            <Video source={{ uri: post.mediaUri }} style={styles.postDetailImage} resizeMode={ResizeMode.COVER} useNativeControls />
+          ) : (
             <Image source={{ uri: post.mediaUri }} style={styles.postDetailImage} />
-          )}
+          ))}
 
           <View style={styles.postFooter}>
             <TouchableOpacity style={styles.footerActionButton} onPress={onOpenComments}>
@@ -612,62 +667,10 @@ export function PostDetailModal({
 // 4. MAIN HOMESCREEN COMPONENT (DEFAULT EXPORT)
 // ==========================================
 export default forwardRef<HomeScreenRef, { navigation: any }>(function HomeScreen({ navigation }, ref) {
-  const [posts, setPosts] = useState<Post[]>([
-    {
-      id: '1',
-      author: 'Chris Moya',
-      subtitle: 'Explore your future',
-      text: '',
-      mediaUri: 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=800&q=80',
-      commentsCount: 2,
-      challengesCount: 0,
-    },
-    {
-      id: '2',
-      author: 'You',
-      subtitle: 'New update',
-      text: 'Working on updating the mobile layout interface today!',
-      mediaUri: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=800&q=80',
-      commentsCount: 0,
-      challengesCount: 0,
-    },
-  ]);
-
-  const [postComments, setPostComments] = useState<{ [postId: string]: CommentItemData[] }>({
-    '1': [
-      {
-        id: '1',
-        author: 'Bw Oyugi Makosa',
-        isAuthor: true,
-        text: 'In the new workflow, this looks robust.',
-        replies: [
-          { id: 'r1', author: 'Chinonso', text: 'Agreed completely!', timestamp: '2m ago' }
-        ]
-      },
-      {
-        id: '2',
-        author: 'Chinonso Chukwudi',
-        isAuthor: false,
-        text: 'Amazing setup!',
-        replies: []
-      }
-    ],
-    '2': []
-  });
-
-  const [postChallenges, setPostChallenges] = useState<{ [postId: string]: CommentItemData[] }>({
-    '1': [
-      {
-        id: 'c1',
-        author: 'You',
-        isAuthor: true,
-        text: 'Everyone, make a revision with this.',
-        image: 'https://images.unsplash.com/photo-1557804506-669a67965ba0?auto=format&fit=crop&w=800&q=80',
-        replies: []
-      }
-    ],
-    '2': []
-  });
+  const { user } = useAuth();
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [postComments, setPostComments] = useState<{ [postId: string]: CommentItemData[] }>({});
+  const [postChallenges, setPostChallenges] = useState<{ [postId: string]: CommentItemData[] }>({});
 
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [editingPost, setEditingPost] = useState<Post | null>(null);
@@ -675,6 +678,9 @@ export default forwardRef<HomeScreenRef, { navigation: any }>(function HomeScree
   const [selectedPostDetail, setSelectedPostDetail] = useState<Post | null>(null);
   const [highlightedPostId, setHighlightedPostId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [isLoadingPosts, setIsLoadingPosts] = useState(true);
+  const [isLoadingMorePosts, setIsLoadingMorePosts] = useState(false);
+  const [feedError, setFeedError] = useState('');
 
   // Live Event modal state for slider
   const [selectedEventItem, setSelectedEventItem] = useState<EventItem | null>(null);
@@ -685,17 +691,147 @@ export default forwardRef<HomeScreenRef, { navigation: any }>(function HomeScree
   const [selectedPostForAction, setSelectedPostForAction] = useState<Post | null>(null);
 
   // Active Unit State
-  const [currentUnit] = useState('CIT 360');
+  const [currentUnit, setCurrentUnit] = useState('');
+  const [availableUnits, setAvailableUnits] = useState<string[]>([]);
+  const [courseShareCode, setCourseShareCode] = useState('');
+  const [isUnitPickerVisible, setIsUnitPickerVisible] = useState(false);
+  const [isChangingUnit, setIsChangingUnit] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   const scrollViewRef = useRef<ScrollView>(null);
+  const postsRequestId = useRef(0);
+  const nextPostCursor = useRef<string | null>(null);
+  const isLoadingMorePostsRef = useRef(false);
 
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    setTimeout(() => {
-      setRefreshing(false);
-    }, 1000);
+  const loadPosts = useCallback(async (unit: string, clearBeforeLoad = false) => {
+    const requestId = ++postsRequestId.current;
+    if (clearBeforeLoad) {
+      setPosts([]);
+      nextPostCursor.current = null;
+    }
+    if (!unit) {
+      setPosts([]);
+      nextPostCursor.current = null;
+      setIsLoadingPosts(false);
+      setFeedError('Add a course unit to load its posts.');
+      return;
+    }
+
+    setIsLoadingPosts(true);
+    setFeedError('');
+    try {
+      const page = await fetchUnitPosts(unit);
+      if (requestId !== postsRequestId.current) return;
+      setPosts(page.posts.map(mapPostDto));
+      nextPostCursor.current = page.nextCursor;
+    } catch {
+      if (requestId !== postsRequestId.current) return;
+      setPosts([]);
+      nextPostCursor.current = null;
+      setFeedError('Could not load posts for this unit. Check your connection and try again.');
+    } finally {
+      if (requestId === postsRequestId.current) setIsLoadingPosts(false);
+    }
   }, []);
+
+  const loadMorePosts = useCallback(async () => {
+    const cursor = nextPostCursor.current;
+    if (!cursor || !currentUnit || isLoadingMorePostsRef.current) return;
+
+    const requestId = postsRequestId.current;
+    isLoadingMorePostsRef.current = true;
+    setIsLoadingMorePosts(true);
+    try {
+      const page = await fetchUnitPosts(currentUnit, cursor);
+      if (requestId !== postsRequestId.current) return;
+      setPosts((previous) => {
+        const seen = new Set(previous.map((post) => post.id));
+        return [...previous, ...page.posts.map(mapPostDto).filter((post) => !seen.has(post.id))];
+      });
+      nextPostCursor.current = page.nextCursor;
+      setFeedError('');
+    } catch {
+      if (requestId === postsRequestId.current) {
+        setFeedError('Could not load more posts. Check your connection and retry.');
+      }
+    } finally {
+      isLoadingMorePostsRef.current = false;
+      setIsLoadingMorePosts(false);
+    }
+  }, [currentUnit]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      if (!currentUnit) {
+        const profile = await fetchAcademicProfile();
+        const units = [...profile.mainUnits, ...profile.commonUnits, ...profile.otherUnits];
+        const activeUnit = profile.activeUnit || profile.mainUnits[0] || profile.commonUnits[0] || profile.otherUnits[0] || '';
+        setAvailableUnits(units);
+        setCourseShareCode(profile.shareCode);
+        setCurrentUnit(activeUnit);
+        await loadPosts(activeUnit, true);
+      } else {
+        await loadPosts(currentUnit);
+      }
+    } catch {
+      setFeedError('Could not load your course units. Check your connection and try again.');
+    } finally {
+      setRefreshing(false);
+    }
+  }, [currentUnit, loadPosts]);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchAcademicProfile()
+      .then((profile) => {
+        if (!isMounted) return;
+        const units = [...profile.mainUnits, ...profile.commonUnits, ...profile.otherUnits];
+        setAvailableUnits(units);
+        setCourseShareCode(profile.shareCode);
+        const activeUnit = profile.activeUnit || profile.mainUnits[0] || profile.commonUnits[0] || profile.otherUnits[0] || '';
+        setCurrentUnit(activeUnit);
+        void loadPosts(activeUnit, true);
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setIsLoadingPosts(false);
+        setFeedError('Could not load your course units. Check your connection and try again.');
+      });
+    return () => {
+      isMounted = false;
+      postsRequestId.current += 1;
+    };
+  }, [loadPosts]);
+
+  const handleChangeUnit = async (unit: string) => {
+    if (isChangingUnit || unit === currentUnit) {
+      setIsUnitPickerVisible(false);
+      return;
+    }
+    setIsChangingUnit(true);
+    try {
+      const profile = await updateActiveUnit(unit);
+      setCurrentUnit(profile.activeUnit);
+      setIsUnitPickerVisible(false);
+      setSearchQuery('');
+      scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+      await loadPosts(profile.activeUnit, true);
+    } catch {
+      Alert.alert('Unable to change course', 'Please check your connection and try again.');
+    } finally {
+      setIsChangingUnit(false);
+    }
+  };
+
+  const shareCourseSetup = async () => {
+    if (!courseShareCode) return;
+    try {
+      await Share.share({ message: `Use my Student Centre course setup code: ${courseShareCode}` });
+    } catch {
+      Alert.alert('Unable to share code', 'Please try again.');
+    }
+  };
 
   const scrollToTop = useCallback(() => {
     scrollViewRef.current?.scrollTo({ y: 0, animated: true });
@@ -736,30 +872,58 @@ export default forwardRef<HomeScreenRef, { navigation: any }>(function HomeScree
     };
   }, []);
 
-  const handleCreateOrUpdatePost = (text: string, mediaUri?: string) => {
+  const handleCreateOrUpdatePost = async (text: string, mediaUri?: string): Promise<void> => {
     if (editingPost) {
-      setPosts(prev => prev.map(p => p.id === editingPost.id ? { ...p, text, mediaUri } : p));
-      setEditingPost(null);
-    } else {
-      const newPostId = Date.now().toString();
-      const newPost: Post = {
-        id: newPostId,
-        author: 'You',
-        subtitle: 'New update',
+      const updatedPost = await updateUnitPost(
+        editingPost.id,
+        editingPost.courseUnit,
         text,
         mediaUri,
-        commentsCount: 0,
-        challengesCount: 0,
+        Boolean(editingPost.mediaUri && !mediaUri)
+      );
+      setPosts((previous) => previous.map((post) => post.id === updatedPost.id ? {
+        ...post,
+        text: updatedPost.text,
+        mediaUri: updatedPost.mediaUri || undefined,
+        mediaType: updatedPost.mediaType,
+        subtitle: formatPostTimestamp(updatedPost.updatedAt),
+      } : post));
+    } else {
+      const createdPost = await createUnitPost(currentUnit, text, mediaUri);
+      const newPost: Post = {
+        id: createdPost.id,
+        authorId: createdPost.author.id,
+        courseUnit: createdPost.courseUnit,
+        author: createdPost.author.displayName || user?.displayName || 'You',
+        subtitle: formatPostTimestamp(createdPost.createdAt),
+        text: createdPost.text,
+        mediaUri: createdPost.mediaUri || undefined,
+        mediaType: createdPost.mediaType,
+        commentsCount: createdPost.commentsCount,
+        challengesCount: createdPost.challengesCount,
       };
-      setPosts([newPost, ...posts]);
-      setPostComments(prev => ({ ...prev, [newPostId]: [] }));
-      setPostChallenges(prev => ({ ...prev, [newPostId]: [] }));
+      setPosts((previous) => [newPost, ...previous]);
+      setPostComments((previous) => ({ ...previous, [newPost.id]: [] }));
+      setPostChallenges((previous) => ({ ...previous, [newPost.id]: [] }));
     }
-    setIsCreateModalVisible(false);
   };
 
   const handleDeletePost = (postId: string) => {
-    setPosts(prev => prev.filter(p => p.id !== postId));
+    Alert.alert('Delete post', 'Are you sure you want to delete this post?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteUnitPost(postId);
+            setPosts((previous) => previous.filter((post) => post.id !== postId));
+          } catch (error: any) {
+            Alert.alert('Unable to delete post', error?.response?.data?.message || 'Please try again.');
+          }
+        },
+      },
+    ]);
   };
 
   const handleShare = async (postId: string, author: string) => {
@@ -784,7 +948,16 @@ export default forwardRef<HomeScreenRef, { navigation: any }>(function HomeScree
       <View style={styles.container}>
         {/* Sticky Active Unit and Search Bar Section */}
         <View style={styles.unitSearchContainer}>
-          <Text style={styles.activeUnitText}>{currentUnit}</Text>
+          <TouchableOpacity
+            style={styles.activeUnitButton}
+            onPress={() => availableUnits.length > 0 && setIsUnitPickerVisible(true)}
+            disabled={availableUnits.length === 0}
+            accessibilityRole="button"
+            accessibilityLabel={availableUnits.length > 0 ? `Change active course. Current course: ${currentUnit}` : `Active course: ${currentUnit}`}
+          >
+            <Text style={styles.activeUnitText} numberOfLines={1}>{currentUnit || 'Course units'}</Text>
+            <Ionicons name="chevron-down" size={18} color={colors.primaryDark} />
+          </TouchableOpacity>
           <View style={styles.searchBarWrapper}>
             <TextInput
               style={styles.unitSearchInput}
@@ -801,12 +974,61 @@ export default forwardRef<HomeScreenRef, { navigation: any }>(function HomeScree
           </View>
         </View>
 
+        <Modal
+          visible={isUnitPickerVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setIsUnitPickerVisible(false)}
+        >
+          <TouchableWithoutFeedback onPress={() => setIsUnitPickerVisible(false)}>
+            <View style={styles.unitPickerOverlay}>
+              <TouchableWithoutFeedback>
+                <View style={styles.unitPickerCard}>
+                  <Text style={styles.unitPickerTitle}>Choose a course unit</Text>
+                  {isChangingUnit ? <Text style={styles.unitPickerStatus}>Saving your choice…</Text> : null}
+                  <ScrollView style={styles.unitPickerList}>
+                    {availableUnits.map((unit) => (
+                      <TouchableOpacity
+                        key={unit}
+                        style={styles.unitPickerRow}
+                        onPress={() => handleChangeUnit(unit)}
+                        disabled={isChangingUnit}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: unit === currentUnit, disabled: isChangingUnit }}
+                      >
+                        <Text style={[styles.unitPickerText, unit === currentUnit && styles.unitPickerTextActive]}>{unit}</Text>
+                        {unit === currentUnit ? <Ionicons name="checkmark-circle" size={20} color={colors.primaryDark} /> : null}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                  {courseShareCode ? (
+                    <TouchableOpacity style={styles.shareCourseCodeButton} onPress={shareCourseSetup}>
+                      <Ionicons name="share-social-outline" size={18} color={colors.primaryDark} />
+                      <Text style={styles.unitPickerCancelText}>Share course setup code</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <TouchableOpacity style={styles.unitPickerCancel} onPress={() => setIsUnitPickerVisible(false)} disabled={isChangingUnit}>
+                    <Text style={styles.unitPickerCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableWithoutFeedback>
+            </View>
+          </TouchableWithoutFeedback>
+        </Modal>
+
         {/* Main Posts Feed with ScrollView containing Events Slider */}
         <ScrollView
           ref={scrollViewRef}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          scrollEventThrottle={250}
+          onScroll={({ nativeEvent }) => {
+            const distanceToBottom = nativeEvent.contentSize.height - (
+              nativeEvent.contentOffset.y + nativeEvent.layoutMeasurement.height
+            );
+            if (distanceToBottom < 450) void loadMorePosts();
+          }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2e7d32" />
           }
@@ -839,11 +1061,35 @@ export default forwardRef<HomeScreenRef, { navigation: any }>(function HomeScree
             </ScrollView>
           </View>
 
+          {isLoadingPosts && posts.length === 0 ? (
+            <View style={styles.feedStatus}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.feedStatusText}>Loading posts for {currentUnit || 'your course'}…</Text>
+            </View>
+          ) : null}
+
+          {!isLoadingPosts && feedError ? (
+            <View style={styles.feedStatus}>
+              <Text style={styles.feedStatusText}>{feedError}</Text>
+              <TouchableOpacity onPress={onRefresh} accessibilityRole="button">
+                <Text style={styles.feedRetryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {!isLoadingPosts && !feedError && posts.length === 0 ? (
+            <View style={styles.feedStatus}>
+              <Ionicons name="chatbubbles-outline" size={34} color={colors.textSecondary} />
+              <Text style={styles.feedEmptyTitle}>No posts in {currentUnit} yet</Text>
+              <Text style={styles.feedStatusText}>Be the first to share something with this course unit.</Text>
+            </View>
+          ) : null}
+
           {posts.map((post) => {
             const isHighlighted = highlightedPostId === post.id;
             const currentComments = postComments[post.id] || [];
             const currentChallenges = postChallenges[post.id] || [];
-            const isCurrentUser = post.author === 'You';
+            const isCurrentUser = post.authorId === user?.id;
 
             return (
               <TouchableOpacity
@@ -877,9 +1123,11 @@ export default forwardRef<HomeScreenRef, { navigation: any }>(function HomeScree
 
                 {post.text ? <Text style={styles.postText}>{post.text}</Text> : null}
                 
-                {post.mediaUri && (
+                {post.mediaUri && (post.mediaType === 'video' ? (
+                  <Video source={{ uri: post.mediaUri }} style={styles.postImage} resizeMode={ResizeMode.COVER} useNativeControls />
+                ) : (
                   <Image source={{ uri: post.mediaUri }} style={styles.postImage} />
-                )}
+                ))}
 
                 <View style={styles.postFooter}>
                   <TouchableOpacity
@@ -924,6 +1172,12 @@ export default forwardRef<HomeScreenRef, { navigation: any }>(function HomeScree
               </TouchableOpacity>
             );
           })}
+          {isLoadingMorePosts ? (
+            <View style={styles.feedLoadingMore}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.feedStatusText}>Loading more posts…</Text>
+            </View>
+          ) : null}
         </ScrollView>
 
         <TouchableOpacity
@@ -1171,6 +1425,61 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1b5e20',
   },
+  activeUnitButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    maxWidth: '45%',
+  },
+  feedStatus: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 36,
+    gap: 10,
+  },
+  feedStatusText: {
+    color: colors.textSecondary,
+    fontSize: 15,
+    textAlign: 'center',
+  },
+  feedEmptyTitle: {
+    color: colors.textPrimary,
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  feedRetryText: {
+    color: colors.primaryDark,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  feedLoadingMore: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
+    gap: 8,
+  },
+  unitPickerOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(0,0,0,0.42)',
+  },
+  unitPickerCard: {
+    maxHeight: '75%',
+    padding: 18,
+    borderRadius: 16,
+    backgroundColor: colors.background,
+  },
+  unitPickerTitle: { color: colors.textPrimary, fontSize: 19, fontWeight: '700', marginBottom: 10 },
+  unitPickerStatus: { color: colors.textSecondary, marginBottom: 8 },
+  unitPickerList: { flexShrink: 1 },
+  unitPickerRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: colors.border, paddingVertical: 10 },
+  unitPickerText: { flex: 1, color: colors.textPrimary, fontSize: 15 },
+  unitPickerTextActive: { color: colors.primaryDark, fontWeight: '700' },
+  shareCourseCodeButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 8, padding: 10, marginTop: 8 },
+  unitPickerCancel: { alignSelf: 'flex-end', padding: 10, marginTop: 4 },
+  unitPickerCancelText: { color: colors.primaryDark, fontWeight: '700' },
   searchBarWrapper: {
     flex: 1,
     flexDirection: 'row',

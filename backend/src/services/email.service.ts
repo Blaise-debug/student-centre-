@@ -34,3 +34,30 @@ export async function sendVerificationEmail(
   }
 }
 
+export async function sendPasswordResetEmail(
+  recipient: string,
+  resetUrl: string,
+  expiryMinutes = 30
+): Promise<void> {
+  const { error } = await resend.emails.send({
+    from: env.EMAIL_FROM,
+    to: recipient,
+    subject: 'Reset your Students\' Centre password',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 520px; margin: auto; color: #1A2E1E;">
+        <h2>Reset your password</h2>
+        <p>We received a request to reset the password for your Students' Centre account.</p>
+        <p><a href="${resetUrl}" style="display:inline-block;background:#129A51;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none">Reset password</a></p>
+        <p>This link expires in ${expiryMinutes} minutes and can be used once.</p>
+        <p>If you did not request this change, ignore this email. Your current password will remain active.</p>
+      </div>
+    `,
+    text: `Reset your Students' Centre password using this link: ${resetUrl}\nThis link expires in ${expiryMinutes} minutes and can be used once. If you did not request this, ignore this email.`,
+  });
+
+  if (error) {
+    console.error('[Email] Password reset delivery failed:', error.message);
+    throw new Error('Unable to send password reset email');
+  }
+}
+

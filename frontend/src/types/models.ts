@@ -10,7 +10,22 @@ export interface User {
   status?: UserStatus;
   lastSeen?: string | null;
   isVerified?: boolean;
+  onboardingComplete?: boolean;
   isDeleted?: boolean;
+}
+
+export interface AcademicProfile {
+  id: string;
+  country: string;
+  institution: string;
+  levelOfStudy: string;
+  yearOfStudy: string;
+  program: string;
+  mainUnits: string[];
+  commonUnits: string[];
+  otherUnits: string[];
+  activeUnit: string;
+  shareCode: string;
 }
 
 export interface Conversation {
@@ -33,10 +48,13 @@ export interface MessageReplyPreview {
 
 export interface Message {
   id: string;
+  _id?: string;
   conversation: string;
   sender: User;
   content: string;
   attachment?: string | null;
+  attachmentUrl?: string | null;
+  mediaUrl?: string | null;
   
 attachmentType?: 'image' | 'video' | 'file' | 'audio' | null;
   readBy?: string[];

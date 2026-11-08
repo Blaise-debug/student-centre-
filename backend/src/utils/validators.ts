@@ -8,6 +8,11 @@ export function isValidUsername(username: string): boolean {
 }
 
 export function isValidPassword(password: string): boolean {
-  // min 8 chars, at least one letter and one number
-  return password.length >= 8 && /[a-zA-Z]/.test(password) && /[0-9]/.test(password);
+  // bcrypt only processes 72 bytes; reject longer inputs rather than silently truncating them.
+  return (
+    password.length >= 8 &&
+    Buffer.byteLength(password, 'utf8') <= 72 &&
+    /[a-zA-Z]/.test(password) &&
+    /[0-9]/.test(password)
+  );
 }

@@ -168,8 +168,7 @@ export default function MessagesScreen() {
   }
 
   function openChat(conversation: Conversation) {
-    const rootNavigation = navigation.getParent() || navigation;
-    rootNavigation.navigate('ChatModal', {
+    navigation.navigate('ChatModal', {
       conversationId: conversation.id,
       conversationName: getDisplayName(conversation),
     });

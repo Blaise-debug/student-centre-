@@ -13,6 +13,10 @@ import { colors } from '../theme/colors';
 
 import LoginScreen from '../screens/Auth/LoginScreen';
 import RegisterScreen from '../screens/Auth/RegisterScreen';
+import VerifyEmailScreen from '../screens/Auth/VerifyEmailScreen';
+import ForgotPasswordScreen from '../screens/Auth/ForgotPasswordScreen';
+import ResetPasswordScreen from '../screens/Auth/ResetPasswordScreen';
+import OnboardingScreen from '../screens/Onboarding/OnboardingScreen';
 
 import DrawerNavigator from './DrawerNavigator';
 
@@ -66,6 +70,16 @@ export default function RootNavigator() {
             name="Register"
             component={RegisterScreen}
           />
+
+          <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} />
+          <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+          <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
+        </>
+      ) : !user.onboardingComplete ? (
+        <>
+          <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+          <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+          <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
         </>
       ) : (
         <>
@@ -127,6 +141,9 @@ export default function RootNavigator() {
               headerTintColor: colors.textPrimary,
             }}
           />
+
+          <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
+          <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
         </>
       )}
     </Stack.Navigator>

@@ -14,25 +14,102 @@ interface SendMessagePayload {
   replyTo?: string | null;
 }
 
-interface TypingPayload {
-  conversationId: string;
-}
-
 interface DeleteMessagesPayload {
   conversationId: string;
   messageIds: string[];
   mode: 'me' | 'everyone';
 }
 
-export function registerMessageHandlers(io: Server, socket: AuthenticatedSocket) {
+type SocketAck = (response: { success?: true; error?: string }) => void;
+
+export interface MessageSocketDependencies {
+  isConversationParticipant: (
+    conversationId: string,
+    userId: string
+  ) => Promise<boolean>;
+  markMessagesRead: (conversationId: string, userId: string) => Promise<void>;
+}
+
+const defaultDependencies: MessageSocketDependencies = {
+  async isConversationParticipant(conversationId, userId) {
+    return Boolean(
+      await Conversation.exists({
+        _id: conversationId,
+        participants: userId,
+      })
+    );
+  },
+  async markMessagesRead(conversationId, userId) {
+    await Message.updateMany(
+      {
+        conversation: conversationId,
+        sender: { $ne: userId },
+        readBy: { $ne: userId },
+      },
+      { $addToSet: { readBy: userId } }
+    );
+  },
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function registerMessageHandlers(
+  io: Server,
+  socket: AuthenticatedSocket,
+  dependencies: MessageSocketDependencies = defaultDependencies
+) {
   const userId = socket.userId!;
 
-  socket.on('conversation:join', (conversationId: string) => {
-    socket.join(`conversation:${conversationId}`);
+  socket.on('conversation:join', async (conversationId: unknown, ack?: SocketAck) => {
+    if (
+      typeof conversationId !== 'string' ||
+      !Types.ObjectId.isValid(conversationId)
+    ) {
+      return ack?.({ error: 'Invalid conversation ID' });
+    }
+
+    try {
+      const isParticipant = await dependencies.isConversationParticipant(
+        conversationId,
+        userId
+      );
+      if (!isParticipant) {
+        return ack?.({ error: 'Conversation not found' });
+      }
+
+      await socket.join(`conversation:${conversationId}`);
+      ack?.({ success: true });
+    } catch (error) {
+      console.error('[Socket] conversation:join error:', error);
+      ack?.({ error: 'Failed to join conversation' });
+    }
   });
 
-  socket.on('conversation:leave', (conversationId: string) => {
-    socket.leave(`conversation:${conversationId}`);
+  socket.on('conversation:leave', async (conversationId: unknown, ack?: SocketAck) => {
+    if (
+      typeof conversationId !== 'string' ||
+      !Types.ObjectId.isValid(conversationId)
+    ) {
+      return ack?.({ error: 'Invalid conversation ID' });
+    }
+
+    try {
+      // Leaving is safe even if membership has since been revoked; always clear a stale room.
+      await socket.leave(`conversation:${conversationId}`);
+      const isParticipant = await dependencies.isConversationParticipant(
+        conversationId,
+        userId
+      );
+      if (!isParticipant) {
+        return ack?.({ error: 'Conversation not found' });
+      }
+      ack?.({ success: true });
+    } catch (error) {
+      console.error('[Socket] conversation:leave error:', error);
+      ack?.({ error: 'Failed to leave conversation' });
+    }
   });
 
   socket.on('message:send', async (payload: SendMessagePayload, ack) => {
@@ -109,11 +186,24 @@ export function registerMessageHandlers(io: Server, socket: AuthenticatedSocket)
 
   socket.on('message:delete', async (payload: DeleteMessagesPayload, ack) => {
     try {
+      if (!isRecord(payload) || typeof payload.conversationId !== 'string') {
+        return ack?.({ error: 'Invalid conversation ID' });
+      }
+
       const { conversationId, messageIds, mode } = payload;
 
       if (!conversationId || !Types.ObjectId.isValid(conversationId)) {
         return ack?.({ error: 'Invalid conversation ID' });
       }
+
+      const isParticipant = await dependencies.isConversationParticipant(
+        conversationId,
+        userId
+      );
+      if (!isParticipant) {
+        return ack?.({ error: 'Conversation not found' });
+      }
+
       if (!Array.isArray(messageIds) || messageIds.length === 0) {
         return ack?.({ error: 'messageIds must be a non-empty array' });
       }
@@ -163,38 +253,78 @@ export function registerMessageHandlers(io: Server, socket: AuthenticatedSocket)
     }
   });
 
-  socket.on('typing:start', (payload: TypingPayload) => {
-    socket.to(`conversation:${payload.conversationId}`).emit('typing:update', {
-      userId,
-      conversationId: payload.conversationId,
-      isTyping: true,
-    });
-  });
+  async function handleTyping(
+    event: 'typing:start' | 'typing:stop',
+    payload: unknown,
+    ack?: SocketAck
+  ) {
+    if (
+      !isRecord(payload) ||
+      typeof payload.conversationId !== 'string' ||
+      !Types.ObjectId.isValid(payload.conversationId)
+    ) {
+      return ack?.({ error: 'Invalid conversation ID' });
+    }
 
-  socket.on('typing:stop', (payload: TypingPayload) => {
-    socket.to(`conversation:${payload.conversationId}`).emit('typing:update', {
-      userId,
-      conversationId: payload.conversationId,
-      isTyping: false,
-    });
-  });
-
-  socket.on('message:read', async (payload: { conversationId: string }) => {
     try {
-      const { conversationId } = payload;
-      if (!Types.ObjectId.isValid(conversationId)) return;
-
-      await Message.updateMany(
-        { conversation: conversationId, readBy: { $ne: userId } },
-        { $addToSet: { readBy: userId } }
+      const conversationId = payload.conversationId;
+      const isParticipant = await dependencies.isConversationParticipant(
+        conversationId,
+        userId
       );
+      if (!isParticipant) {
+        return ack?.({ error: 'Conversation not found' });
+      }
 
+      socket.to(`conversation:${conversationId}`).emit('typing:update', {
+        userId,
+        conversationId,
+        isTyping: event === 'typing:start',
+      });
+      ack?.({ success: true });
+    } catch (error) {
+      console.error(`[Socket] ${event} error:`, error);
+      ack?.({ error: 'Failed to update typing status' });
+    }
+  }
+
+  socket.on('typing:start', (payload: unknown, ack?: SocketAck) => {
+    return handleTyping('typing:start', payload, ack);
+  });
+
+  socket.on('typing:stop', (payload: unknown, ack?: SocketAck) => {
+    return handleTyping('typing:stop', payload, ack);
+  });
+
+  socket.on('message:read', async (payload: unknown, ack?: SocketAck) => {
+    if (
+      !isRecord(payload) ||
+      typeof payload.conversationId !== 'string' ||
+      !Types.ObjectId.isValid(payload.conversationId)
+    ) {
+      return ack?.({ error: 'Invalid conversation ID' });
+    }
+
+    const conversationId = payload.conversationId;
+
+    try {
+      const isParticipant = await dependencies.isConversationParticipant(
+        conversationId,
+        userId
+      );
+      if (!isParticipant) {
+        return ack?.({ error: 'Conversation not found' });
+      }
+
+      await dependencies.markMessagesRead(conversationId, userId);
       io.to(`conversation:${conversationId}`).emit('message:read:update', {
         conversationId,
         readerId: userId,
       });
+      ack?.({ success: true });
     } catch (error) {
       console.error('[Socket] message:read error:', error);
+      ack?.({ error: 'Failed to mark messages as read' });
     }
   });
 }

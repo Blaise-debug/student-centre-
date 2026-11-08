@@ -36,14 +36,22 @@ export default function LoginScreen() {
     try {
       await login(emailOrUsername.trim(), password);
       // Navigation happens automatically — RootNavigator switches stacks once `user` is set
-    } catch (error: any) {
-  console.log('[Register] error.message:', error?.message);
-  console.log('[Register] error.response:', error?.response?.data);
-  console.log('[Register] error.code:', error?.code);
-  const message =
-    error?.response?.data?.message || 'Registration failed. Please try again.';
-  Alert.alert('Registration failed', message);
-} finally {
+    } catch (error: unknown) {
+      const apiError = error as {
+        response?: { data?: { message?: string; code?: string; email?: string } };
+      };
+      if (apiError.response?.data?.code === 'EMAIL_NOT_VERIFIED' && apiError.response.data.email) {
+        navigation.navigate('VerifyEmail', {
+          email: apiError.response.data.email,
+          notice: 'Verify your email before signing in. You can request a new code below.',
+        });
+      } else {
+        Alert.alert(
+          'Unable to sign in',
+          apiError.response?.data?.message || 'Please check your details and try again.'
+        );
+      }
+    } finally {
       setIsSubmitting(false);
     }
   }
@@ -67,6 +75,16 @@ export default function LoginScreen() {
           autoCorrect={false}
           editable={!isSubmitting}
         />
+
+        <TouchableOpacity
+          style={styles.forgotPasswordButton}
+          onPress={() => navigation.navigate('ForgotPassword', {
+            email: emailOrUsername.includes('@') ? emailOrUsername.trim() : undefined,
+          })}
+          disabled={isSubmitting}
+        >
+          <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+        </TouchableOpacity>
 
         <TextInput
           style={styles.input}
@@ -145,6 +163,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 8,
     marginBottom: 20,
+  },
+  forgotPasswordButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 2,
+    paddingHorizontal: 2,
+    marginTop: -3,
+    marginBottom: 8,
+  },
+  forgotPasswordText: {
+    color: colors.primaryDark,
+    fontSize: 14,
+    fontWeight: '600',
   },
   buttonDisabled: {
     opacity: 0.6,

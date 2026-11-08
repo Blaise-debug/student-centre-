@@ -14,6 +14,7 @@ interface EnvConfig {
   CLOUDINARY_API_SECRET: string;
   RESEND_API_KEY: string;
   EMAIL_FROM: string;
+  APP_SCHEME: string;
   NODE_ENV: string;
 }
 
@@ -35,5 +36,6 @@ export const env: EnvConfig = {
   CLOUDINARY_API_SECRET: requireEnv('CLOUDINARY_API_SECRET'),
   RESEND_API_KEY: requireEnv('RESEND_API_KEY'),
   EMAIL_FROM: requireEnv('EMAIL_FROM'),
+  APP_SCHEME: process.env.APP_SCHEME || 'studentscentre',
   NODE_ENV: process.env.NODE_ENV || 'development',
 };

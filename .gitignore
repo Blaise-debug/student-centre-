@@ -6,6 +6,7 @@ backend/.env.*
 # Backend dependencies and build output
 backend/node_modules/
 backend/dist/
+backend/.test-dist/
 
 # Uploaded user files
 backend/uploads/

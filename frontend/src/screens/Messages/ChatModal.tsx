@@ -733,7 +733,7 @@ export default function ChatModal() {
               <TouchableOpacity
                 style={styles.popupActionRow}
                 onPress={() => {
-                  if (pinnedMessage) handleScrollToMessage(pinnedMessage._id);
+                  if (pinnedMessage) handleScrollToMessage(pinnedMessage.id);
                 }}
               >
                 <Ionicons name="eye-outline" size={20} color={colors.primary} />

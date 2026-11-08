@@ -11,6 +11,8 @@ export interface IUser extends Document {
   status: 'online' | 'offline' | 'away';
   lastSeen: Date;
   isVerified: boolean;
+  onboardingComplete: boolean;
+  authVersion: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -67,6 +69,16 @@ const userSchema = new Schema<IUser>(
     isVerified: {
       type: Boolean,
       default: false,
+    },
+    onboardingComplete: {
+      type: Boolean,
+      default: false,
+    },
+    authVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+      select: false,
     },
   },
   { timestamps: true }

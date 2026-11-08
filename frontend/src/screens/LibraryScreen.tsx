@@ -2428,7 +2428,7 @@ export default function LibraryScreen({ navigation }: any) {
       const renderNode = (
         comment: CommentItem,
         nested = false
-      ): React.ReactNode => {
+      ): React.ReactElement => {
         const isOwn =
           comment.isOwn ||
           comment.author === 'You';

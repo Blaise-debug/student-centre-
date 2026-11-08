@@ -1,7 +1,7 @@
 
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { User } from '../models/User';
+import { IUser, User } from '../models/User';
 import { signToken } from '../utils/jwt';
 import {
   isValidEmail,
@@ -12,31 +12,61 @@ import {
   createAndSendVerificationCode,
   verifyEmailAndActivateAccount,
 } from '../services/email-verification.service';
+import { createAndSendPasswordResetLink, consumePasswordReset } from '../services/password-reset.service';
 
 const SALT_ROUNDS = 12;
 
+function toSafeUser(user: IUser) {
+  return {
+    id: user._id.toString(),
+    username: user.username,
+    email: user.email,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+    bio: user.bio,
+    status: user.status,
+    lastSeen: user.lastSeen,
+    isVerified: user.isVerified,
+    onboardingComplete: Boolean(user.onboardingComplete),
+  };
+}
+
 export async function register(req: Request, res: Response) {
   try {
-    const { username, email, password, displayName } = req.body;
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const { username, email, password, displayName } = body;
 
-    if (!username || !email || !password || !displayName) {
+    if (
+      typeof username !== 'string' ||
+      typeof email !== 'string' ||
+      typeof password !== 'string' ||
+      typeof displayName !== 'string' ||
+      !username.trim() ||
+      !email.trim() ||
+      !password ||
+      !displayName.trim()
+    ) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    if (!isValidUsername(username)) {
+    if (!isValidUsername(username.trim())) {
       return res.status(400).json({
         message: 'Username must be 3-30 characters, letters/numbers/underscores only',
       });
     }
 
-    if (!isValidEmail(email)) {
+    if (!isValidEmail(email.trim())) {
       return res.status(400).json({ message: 'Invalid email address' });
     }
 
     if (!isValidPassword(password)) {
       return res.status(400).json({
-        message: 'Password must be at least 8 characters with a letter and a number',
+        message: 'Password must be at least 8 characters, include a letter and a number, and be no more than 72 bytes',
       });
+    }
+
+    if (displayName.trim().length > 50) {
+      return res.status(400).json({ message: 'Display name must be 50 characters or fewer' });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
@@ -80,14 +110,7 @@ export async function register(req: Request, res: Response) {
 
     return res.status(201).json({
       message: 'Registration successful. Please verify your email.',
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        displayName: user.displayName,
-        avatarUrl: user.avatarUrl,
-        isVerified: user.isVerified,
-      },
+      user: toSafeUser(user),
     });
   } catch (error) {
     console.error('[Auth] Register error:', error);
@@ -109,8 +132,9 @@ export async function register(req: Request, res: Response) {
 
 export async function verifyEmail(req: Request, res: Response) {
   try {
-    const email = String(req.body.email || '').trim().toLowerCase();
-    const code = String(req.body.code || '').trim();
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const code = typeof body.code === 'string' ? body.code.trim() : '';
 
     if (!isValidEmail(email) || !/^\d{6}$/.test(code)) {
       return res.status(400).json({
@@ -127,33 +151,47 @@ export async function verifyEmail(req: Request, res: Response) {
     }
 
     if (user.isVerified) {
-      return res.status(200).json({
+      return res.status(409).json({
         message: 'Email is already verified',
+        code: 'EMAIL_ALREADY_VERIFIED',
       });
     }
 
     const isVerified = await verifyEmailAndActivateAccount(
-  user._id.toString(),
-  code
-);
+      user._id.toString(),
+      code
+    );
 
-if (!isVerified) {
-  // Another request may have verified this account concurrently.
-  const latestUser = await User.findById(user._id).select('isVerified');
+    if (!isVerified) {
+      // Another request may have verified the address; never issue a token without the code.
+      const latestUser = await User.findById(user._id).select('isVerified');
 
-  if (latestUser?.isVerified) {
-    return res.status(200).json({
-      message: 'Email is already verified',
+      if (latestUser?.isVerified) {
+        return res.status(409).json({
+          message: 'Email is already verified. Please sign in.',
+          code: 'EMAIL_ALREADY_VERIFIED',
+        });
+      }
+
+      return res.status(400).json({
+        message: 'Invalid or expired verification code',
+      });
+    }
+
+    const verifiedUser = await User.findById(user._id).select('+authVersion');
+    if (!verifiedUser) {
+      return res.status(404).json({ message: 'Account not found' });
+    }
+
+    const token = signToken({
+      userId: verifiedUser._id.toString(),
+      tokenVersion: verifiedUser.authVersion ?? 0,
     });
-  }
-
-  return res.status(400).json({
-    message: 'Invalid or expired verification code',
-  });
-}
 
     return res.status(200).json({
-      message: 'Email verified successfully. You can now log in.',
+      message: 'Email verified successfully.',
+      token,
+      user: toSafeUser(verifiedUser),
     });
   } catch (error) {
     console.error('[Auth] Verify email error:', error);
@@ -165,7 +203,8 @@ if (!isVerified) {
 
 export async function resendVerification(req: Request, res: Response) {
   try {
-    const email = String(req.body.email || '').trim().toLowerCase();
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
 
     if (!isValidEmail(email)) {
       return res.status(400).json({
@@ -210,9 +249,10 @@ export async function resendVerification(req: Request, res: Response) {
 
 export async function login(req: Request, res: Response) {
   try {
-    const { emailOrUsername, password } = req.body;
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const { emailOrUsername, password } = body;
 
-    if (!emailOrUsername || !password) {
+    if (typeof emailOrUsername !== 'string' || typeof password !== 'string' || !password) {
       return res.status(400).json({
         message: 'Email/username and password are required',
       });
@@ -222,7 +262,7 @@ export async function login(req: Request, res: Response) {
 
     const user = await User.findOne({
       $or: [{ email: identifier }, { username: identifier }],
-    }).select('+passwordHash');
+    }).select('+passwordHash +authVersion');
 
     if (!user) {
       return res.status(401).json({ message: 'Invalid credentials' });
@@ -238,6 +278,7 @@ export async function login(req: Request, res: Response) {
       return res.status(403).json({
         message: 'Please verify your email before logging in.',
         code: 'EMAIL_NOT_VERIFIED',
+        email: user.email,
       });
     }
 
@@ -245,18 +286,14 @@ export async function login(req: Request, res: Response) {
     user.lastSeen = new Date();
     await user.save();
 
-    const token = signToken({ userId: user._id.toString() });
+    const token = signToken({
+      userId: user._id.toString(),
+      tokenVersion: user.authVersion ?? 0,
+    });
 
     return res.status(200).json({
       token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        displayName: user.displayName,
-        avatarUrl: user.avatarUrl,
-        isVerified: user.isVerified,
-      },
+      user: toSafeUser(user),
     });
   } catch (error) {
     console.error('[Auth] Login error:', error);
@@ -266,15 +303,73 @@ export async function login(req: Request, res: Response) {
 
 export async function getMe(req: Request, res: Response) {
   try {
-    const user = await User.findById(req.user?.userId);
+    const user = await User.findById(req.user?.userId).select(
+      'username email displayName avatarUrl bio status lastSeen isVerified onboardingComplete'
+    );
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    return res.status(200).json({ user });
+    return res.status(200).json({ user: toSafeUser(user) });
   } catch (error) {
     console.error('[Auth] GetMe error:', error);
     return res.status(500).json({ message: 'Failed to fetch user' });
+  }
+}
+
+export async function requestPasswordReset(req: Request, res: Response) {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ message: 'Enter a valid email address.' });
+    }
+
+    const user = await User.findOne({ email, isVerified: true }).select('_id email');
+    if (user) {
+      try {
+        await createAndSendPasswordResetLink(user._id.toString(), user.email);
+      } catch (error) {
+        if (!(error instanceof Error && error.message === 'PASSWORD_RESET_COOLDOWN')) {
+          console.error('[Auth] Password reset request failed:', error);
+        }
+      }
+    }
+
+    return res.status(200).json({
+      message: 'If an eligible account exists for that email, a reset link has been sent.',
+    });
+  } catch (error) {
+    console.error('[Auth] Password reset request error:', error);
+    return res.status(503).json({ message: 'Password reset is temporarily unavailable.' });
+  }
+}
+
+export async function resetPassword(req: Request, res: Response) {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const token = typeof body.token === 'string' ? body.token.trim() : '';
+    const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+
+    if (!token || !isValidPassword(newPassword)) {
+      return res.status(400).json({
+        message: 'Use a valid reset link and a password with at least 8 characters, a letter, a number, and no more than 72 bytes.',
+      });
+    }
+
+    const changed = await consumePasswordReset(token, newPassword);
+    if (!changed) {
+      return res.status(400).json({
+        message: 'This reset link is invalid or expired. Request a new one.',
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Password updated. Please sign in with your new password.',
+    });
+  } catch (error) {
+    console.error('[Auth] Password reset completion error:', error);
+    return res.status(500).json({ message: 'Unable to reset the password right now.' });
   }
 }
